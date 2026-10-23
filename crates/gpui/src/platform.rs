@@ -1361,6 +1361,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     ) {
     }
     fn set_input_region(&self, _region: Option<&[Bounds<Pixels>]>) {}
+    /// For a session lock surface, whether the compositor has confirmed the lock, which is when
+    /// the session is locked and the surface is what shows. `None` for any other window.
+    fn session_lock_confirmed(&self) -> Option<bool> {
+        None
+    }
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }

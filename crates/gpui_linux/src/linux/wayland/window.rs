@@ -2360,6 +2360,15 @@ impl PlatformWindow for WaylandWindow {
         state.surface.commit();
     }
 
+    fn session_lock_confirmed(&self) -> Option<bool> {
+        match &self.borrow().surface_state {
+            WaylandSurfaceState::SessionLock(WaylandLockSurfaceState { lock, .. }) => {
+                Some(lock.borrow().locked)
+            }
+            _ => None,
+        }
+    }
+
     fn set_input_region(&self, region: Option<&[Bounds<Pixels>]>) {
         let state = self.borrow();
         match region {

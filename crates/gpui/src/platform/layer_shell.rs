@@ -54,6 +54,11 @@ pub enum KeyboardInteractivity {
     OnDemand,
 }
 
+/// A layer-shell window with this namespace is created as an `ext-session-lock-v1` lock surface
+/// on its output (`WindowOptions::display_id`) instead. The session stays locked while at least
+/// one lock surface exists, and closing the last one unlocks it. Its other options are ignored.
+pub const SESSION_LOCK_NAMESPACE: &str = "gpui-session-lock";
+
 /// Options for creating a layer_shell window.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LayerShellOptions {

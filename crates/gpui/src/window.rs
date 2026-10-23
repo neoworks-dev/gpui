@@ -2543,6 +2543,12 @@ impl Window {
         self.platform_window.set_input_region(region);
     }
 
+    /// For a session lock surface (a layer-shell window with `layer_shell::SESSION_LOCK_NAMESPACE`),
+    /// whether the compositor has confirmed the lock. `None` for any other window.
+    pub fn session_lock_confirmed(&self) -> Option<bool> {
+        self.platform_window.session_lock_confirmed()
+    }
+
     /// Return the `WindowBounds` to indicate that how a window should be opened
     /// after it has been closed
     pub fn window_bounds(&self) -> WindowBounds {
