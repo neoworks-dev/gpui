@@ -64,6 +64,31 @@ mod check {
             let display_id = Some(display_id);
 
             let (anchor, initial, resized) = scenario();
+            let count: usize =
+                std::env::var("LAYER_CHECK_COUNT").ok().and_then(|value| value.parse().ok()).unwrap_or(1);
+            for _ in 1..count {
+                cx.open_window(
+                    WindowOptions {
+                        titlebar: None,
+                        display_id,
+                        window_bounds: Some(WindowBounds::Windowed(Bounds {
+                            origin: point(px(0.), px(0.)),
+                            size: initial,
+                        })),
+                        app_id: Some("gpui-layer-check".to_string()),
+                        window_background: WindowBackgroundAppearance::Transparent,
+                        kind: WindowKind::LayerShell(LayerShellOptions {
+                            namespace: "gpui-layer-check".to_string(),
+                            anchor,
+                            keyboard_interactivity: KeyboardInteractivity::None,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|_| Check { step: 0 }),
+                )
+                .unwrap();
+            }
             let window = cx
                 .open_window(
                     WindowOptions {
