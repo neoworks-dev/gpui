@@ -2514,6 +2514,18 @@ impl Window {
         self.platform_window.set_exclusive_edge(edge);
     }
 
+    /// Set how a layer-shell surface receives keyboard focus. Changes are committed
+    /// immediately. This is ignored for other window kinds. (Wayland layer-shell
+    /// windows only)
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn set_keyboard_interactivity(
+        &self,
+        keyboard_interactivity: crate::layer_shell::KeyboardInteractivity,
+    ) {
+        self.platform_window
+            .set_keyboard_interactivity(keyboard_interactivity);
+    }
+
     /// Start an interactive window resize operation if this window is resizable.
     pub fn start_window_resize(&self, edge: ResizeEdge) {
         if self.is_resizable {
