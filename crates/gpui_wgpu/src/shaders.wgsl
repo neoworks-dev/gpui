@@ -135,14 +135,20 @@ struct Background {
     // 1u is LinearGradient
     // 2u is PatternSlash
     // 3u is Checkerboard
+    // 4u is RadialGradient
     tag: u32,
     // 0u is sRGB linear color
     // 1u is Oklab color
     color_space: u32,
     solid: Hsla,
     gradient_angle_or_pattern_height: f32,
-    colors: array<LinearColorStop, 2>,
-    pad: u32,
+    colors: array<LinearColorStop, 4>,
+    stop_count: u32,
+    // Radial gradient: center and radius, as fractions of the bounds.
+    radial_x: f32,
+    radial_y: f32,
+    radial_radius_x: f32,
+    radial_radius_y: f32,
 }
 
 struct AtlasTextureId {
@@ -402,7 +408,7 @@ struct GradientColor {
 }
 
 fn prepare_gradient_color(tag: u32, color_space: u32,
-    solid: Hsla, colors: array<LinearColorStop, 2>) -> GradientColor {
+    solid: Hsla, colors: array<LinearColorStop, 4>) -> GradientColor {
     var result = GradientColor();
 
     if (tag == 0u || tag == 2u || tag == 3u) {
@@ -428,6 +434,69 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
     return result;
 }
 
+// The stop at `index` in the space the gradient interpolates in.
+fn gradient_stop(background: Background, index: u32) -> vec4<f32> {
+    let color = hsla_to_rgba(background.colors[index].color);
+    if (background.color_space == 1u) {
+        return linear_srgb_to_oklab(color);
+    }
+    return linear_to_srgba(color);
+}
+
+fn gradient_stop_to_linear(background: Background, color: vec4<f32>) -> vec4<f32> {
+    if (background.color_space == 1u) {
+        return oklab_to_linear_srgb(color);
+    }
+    return srgba_to_linear(color);
+}
+
+// The color at `t` along a gradient with more than two stops.
+fn gradient_stops_color(background: Background, t: f32) -> vec4<f32> {
+    let count = min(background.stop_count, 4u);
+    var previous_color = gradient_stop(background, 0u);
+    var previous_position = background.colors[0].percentage;
+    if (t <= previous_position) {
+        return gradient_stop_to_linear(background, previous_color);
+    }
+    for (var index = 1u; index < count; index += 1u) {
+        let next_color = gradient_stop(background, index);
+        let next_position = background.colors[index].percentage;
+        if (t <= next_position) {
+            let span = max(next_position - previous_position, 0.000001);
+            let mixed = mix(previous_color, next_color, (t - previous_position) / span);
+            return gradient_stop_to_linear(background, mixed);
+        }
+        previous_color = next_color;
+        previous_position = next_position;
+    }
+    return gradient_stop_to_linear(background, previous_color);
+}
+
+// Where `position` is along the gradient line of a linear gradient, 0 at its start and 1 at its end.
+fn linear_gradient_t(background: Background, position: vec2<f32>, bounds: Bounds) -> f32 {
+    // -90 degrees to match the CSS gradient angle.
+    let angle = background.gradient_angle_or_pattern_height;
+    let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
+    var direction = vec2<f32>(cos(radians), sin(radians));
+
+    // Expand the short side to be the same as the long side
+    if (bounds.size.x > bounds.size.y) {
+        direction.y *= bounds.size.y / bounds.size.x;
+    } else {
+        direction.x *= bounds.size.x / bounds.size.y;
+    }
+
+    let half_size = bounds.size / 2.0;
+    let center = bounds.origin + half_size;
+    let center_to_point = position - center;
+    var t = dot(center_to_point, direction) / length(direction);
+    // Check the direct to determine the use x or y
+    if (abs(direction.x) > abs(direction.y)) {
+        return (t + half_size.x) / bounds.size.x;
+    }
+    return (t + half_size.y) / bounds.size.y;
+}
+
 fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
     solid_color: vec4<f32>, color0: vec4<f32>, color1: vec4<f32>) -> vec4<f32> {
     var background_color = vec4<f32>(0.0);
@@ -438,33 +507,14 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
         }
         case 1u: {
             // Linear gradient background.
-            // -90 degrees to match the CSS gradient angle.
-            let angle = background.gradient_angle_or_pattern_height;
-            let radians = (angle % 360.0 - 90.0) * M_PI_F / 180.0;
-            var direction = vec2<f32>(cos(radians), sin(radians));
-            let stop0_percentage = background.colors[0].percentage;
-            let stop1_percentage = background.colors[1].percentage;
-
-            // Expand the short side to be the same as the long side
-            if (bounds.size.x > bounds.size.y) {
-                direction.y *= bounds.size.y / bounds.size.x;
-            } else {
-                direction.x *= bounds.size.x / bounds.size.y;
-            }
-
-            // Get the t value for the linear gradient with the color stop percentages.
-            let half_size = bounds.size / 2.0;
-            let center = bounds.origin + half_size;
-            let center_to_point = position - center;
-            var t = dot(center_to_point, direction) / length(direction);
-            // Check the direct to determine the use x or y
-            if (abs(direction.x) > abs(direction.y)) {
-                t = (t + half_size.x) / bounds.size.x;
-            } else {
-                t = (t + half_size.y) / bounds.size.y;
+            var t = linear_gradient_t(background, position, bounds);
+            if (background.stop_count > 2u) {
+                return gradient_stops_color(background, t);
             }
 
             // Adjust t based on the stop percentages
+            let stop0_percentage = background.colors[0].percentage;
+            let stop1_percentage = background.colors[1].percentage;
             t = (t - stop0_percentage) / (stop1_percentage - stop0_percentage);
             t = clamp(t, 0.0, 1.0);
 
@@ -477,6 +527,13 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
                     background_color = oklab_to_linear_srgb(oklab_color);
                 }
             }
+        }
+        case 4u: {
+            // Radial gradient background: an ellipse around the center, in fractions of the bounds.
+            let center = bounds.origin + vec2<f32>(background.radial_x, background.radial_y) * bounds.size;
+            let radius = max(vec2<f32>(background.radial_radius_x, background.radial_radius_y) * bounds.size,
+                vec2<f32>(0.0001));
+            return gradient_stops_color(background, length((position - center) / radius));
         }
         case 2u: {
             // pattern slash

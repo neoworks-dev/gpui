@@ -747,7 +747,11 @@ pub(crate) enum BackgroundTag {
     LinearGradient = 1,
     PatternSlash = 2,
     Checkerboard = 3,
+    RadialGradient = 4,
 }
+
+/// The most color stops a gradient takes. Stops beyond it are dropped.
+pub const MAX_GRADIENT_STOPS: usize = 4;
 
 /// A color space for color interpolation.
 ///
@@ -781,9 +785,11 @@ pub struct Background {
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
-    pub(crate) colors: [LinearColorStop; 2],
-    /// Padding for alignment for repr(C) layout.
-    pad: u32,
+    pub(crate) colors: [LinearColorStop; MAX_GRADIENT_STOPS],
+    /// How many of `colors` a gradient uses, at least 2.
+    pub(crate) stop_count: u32,
+    /// A radial gradient's center and radius, as fractions of the painted bounds: x, y, radius x, radius y.
+    pub(crate) radial: [f32; 4],
 }
 
 impl std::fmt::Debug for Background {
@@ -794,6 +800,12 @@ impl std::fmt::Debug for Background {
                 f,
                 "LinearGradient({}, {:?}, {:?})",
                 self.gradient_angle_or_pattern_height, self.colors[0], self.colors[1]
+            ),
+            BackgroundTag::RadialGradient => write!(
+                f,
+                "RadialGradient({:?}, {:?})",
+                self.radial,
+                &self.colors[..self.stop_count as usize]
             ),
             BackgroundTag::PatternSlash => write!(
                 f,
@@ -817,8 +829,9 @@ impl Default for Background {
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
-            colors: [LinearColorStop::default(), LinearColorStop::default()],
-            pad: 0,
+            colors: [LinearColorStop::default(); MAX_GRADIENT_STOPS],
+            stop_count: 2,
+            radial: [0.5, 0.5, 0.5, 0.5],
         }
     }
 }
@@ -870,9 +883,51 @@ pub fn linear_gradient(
     Background {
         tag: BackgroundTag::LinearGradient,
         gradient_angle_or_pattern_height: angle,
-        colors: [from.into(), to.into()],
+        colors: padded_stops(&[from.into(), to.into()]).0,
         ..Default::default()
     }
+}
+
+/// Creates a LinearGradient background color from two to [`MAX_GRADIENT_STOPS`] stops, which
+/// are in order of position. Further stops are dropped; a single one makes a solid fill.
+pub fn linear_gradient_stops(angle: f32, stops: &[LinearColorStop]) -> Background {
+    let (colors, stop_count) = padded_stops(stops);
+    Background {
+        tag: BackgroundTag::LinearGradient,
+        gradient_angle_or_pattern_height: angle,
+        colors,
+        stop_count,
+        ..Default::default()
+    }
+}
+
+/// Creates a RadialGradient background color: an ellipse around `center`, with `radius`, both
+/// as fractions of the painted bounds' width and height (`(0.5, 0.5)` for both reaches the middle
+/// of each side from the middle of the box). Stop positions are fractions of the radius: 0.0 is
+/// the center and 1.0 the ellipse. Stops are as for [`linear_gradient_stops`].
+///
+/// <https://developer.mozilla.org/en-US/docs/Web/CSS/gradient/radial-gradient>
+pub fn radial_gradient(center: (f32, f32), radius: (f32, f32), stops: &[LinearColorStop]) -> Background {
+    let (colors, stop_count) = padded_stops(stops);
+    Background {
+        tag: BackgroundTag::RadialGradient,
+        colors,
+        stop_count,
+        radial: [center.0, center.1, radius.0, radius.1],
+        ..Default::default()
+    }
+}
+
+/// The stops in the fixed array a [`Background`] holds, and how many are in use.
+fn padded_stops(stops: &[LinearColorStop]) -> ([LinearColorStop; MAX_GRADIENT_STOPS], u32) {
+    let used = &stops[..stops.len().min(MAX_GRADIENT_STOPS)];
+    let mut colors = [LinearColorStop::default(); MAX_GRADIENT_STOPS];
+    colors[..used.len()].copy_from_slice(used);
+    let last = used.last().copied().unwrap_or_default();
+    for slot in colors.iter_mut().skip(used.len()) {
+        *slot = last;
+    }
+    (colors, used.len().max(2) as u32)
 }
 
 /// A color stop in a linear gradient.
@@ -929,10 +984,7 @@ impl Background {
     pub fn opacity(&self, factor: f32) -> Self {
         let mut background = *self;
         background.solid = background.solid.opacity(factor);
-        background.colors = [
-            self.colors[0].opacity(factor),
-            self.colors[1].opacity(factor),
-        ];
+        background.colors = self.colors.map(|stop| stop.opacity(factor));
         background
     }
 
@@ -940,7 +992,9 @@ impl Background {
     pub fn is_transparent(&self) -> bool {
         match self.tag {
             BackgroundTag::Solid => self.solid.is_transparent(),
-            BackgroundTag::LinearGradient => self.colors.iter().all(|c| c.color.is_transparent()),
+            BackgroundTag::LinearGradient | BackgroundTag::RadialGradient => {
+                self.colors.iter().all(|c| c.color.is_transparent())
+            }
             BackgroundTag::PatternSlash => self.solid.is_transparent(),
             BackgroundTag::Checkerboard => self.solid.is_transparent(),
         }
@@ -1026,6 +1080,30 @@ mod tests {
         assert!(!background.is_transparent());
         background.solid = hsla(0.0, 0.0, 0.0, 0.0);
         assert!(background.is_transparent());
+    }
+
+    #[test]
+    fn test_background_gradient_with_more_stops_and_radial() {
+        let stops = [
+            linear_color_stop(rgba(0xff0000ff), 0.0),
+            linear_color_stop(rgba(0x00ff00ff), 0.5),
+            linear_color_stop(rgba(0x0000ffff), 1.0),
+        ];
+        let linear = linear_gradient_stops(90.0, &stops);
+        assert_eq!(linear.tag, BackgroundTag::LinearGradient);
+        assert_eq!(linear.stop_count, 3);
+        assert_eq!(linear.colors[2], stops[2]);
+        assert_eq!(linear.colors[3], stops[2]);
+        assert_eq!(linear.opacity(0.5).colors[1], stops[1].opacity(0.5));
+
+        let radial = radial_gradient((1.0, 0.0), (0.5, 0.25), &stops);
+        assert_eq!(radial.tag, BackgroundTag::RadialGradient);
+        assert_eq!(radial.radial, [1.0, 0.0, 0.5, 0.25]);
+        assert!(!radial.is_transparent());
+
+        let many = [stops[0]; 6];
+        assert_eq!(linear_gradient_stops(0.0, &many).stop_count as usize, MAX_GRADIENT_STOPS);
+        assert_eq!(linear_gradient_stops(0.0, &stops[..1]).stop_count, 2);
     }
 
     #[test]

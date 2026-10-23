@@ -63,8 +63,9 @@ struct Background {
     uint color_space;
     Hsla solid;
     float gradient_angle_or_pattern_height;
-    LinearColorStop colors[2];
-    uint pad;
+    LinearColorStop colors[4];
+    uint stop_count;
+    float4 radial;
 };
 
 struct GradientColor {
