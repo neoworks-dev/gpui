@@ -90,6 +90,10 @@ impl rwh::HasDisplayHandle for RawWindow {
     }
 }
 
+fn layer_shell_protocol_size(size: Size<Pixels>) -> Size<u32> {
+    size.map(|dimension| f32::from(dimension) as u32)
+}
+
 #[derive(Debug)]
 struct InProgressConfigure {
     size: Option<Size<Pixels>>,
@@ -212,9 +216,8 @@ impl WaylandSurfaceState {
                 surface.id(),
             );
 
-            let width = f32::from(params.bounds.size.width);
-            let height = f32::from(params.bounds.size.height);
-            layer_surface.set_size(width as u32, height as u32);
+            let requested_size = layer_shell_protocol_size(params.bounds.size);
+            layer_surface.set_size(requested_size.width, requested_size.height);
 
             layer_surface.set_anchor(super::layer_shell::wayland_anchor(options.anchor));
             layer_surface.set_keyboard_interactivity(
@@ -475,17 +478,8 @@ impl WaylandSurfaceState {
             WaylandSurfaceState::Xdg(WaylandXdgSurfaceState { xdg_surface, .. }) => {
                 xdg_surface.set_window_geometry(x, y, width, height);
             }
-            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
-                layer_surface,
-                requested_size,
-                ..
-            }) => {
-                // cannot set window position of a layer surface
-                layer_surface.set_size(
-                    f32::from(requested_size.width) as u32,
-                    f32::from(requested_size.height) as u32,
-                );
-            }
+            // The layer-shell requested size is independent of the configured drawable size.
+            WaylandSurfaceState::LayerShell(_) => {}
             WaylandSurfaceState::Popup(WaylandPopupSurfaceState { xdg_surface, .. }) => {
                 xdg_surface.set_window_geometry(x, y, width, height);
             }
@@ -646,6 +640,13 @@ impl WaylandWindowState {
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
     ) -> anyhow::Result<Self> {
+        let mut bounds = options.bounds;
+        if matches!(&surface_state, WaylandSurfaceState::LayerShell(_)) {
+            // Zero is a protocol request for layer-shell, but not a valid drawable dimension.
+            bounds.size = bounds
+                .size
+                .map(|dimension| px(f32::from(dimension).max(1.0)));
+        }
         let renderer = {
             let raw_window = RawWindow {
                 window: surface.id().as_ptr().cast::<c_void>(),
@@ -658,8 +659,8 @@ impl WaylandWindowState {
             };
             let config = WgpuSurfaceConfig {
                 size: Size {
-                    width: DevicePixels(f32::from(options.bounds.size.width) as i32),
-                    height: DevicePixels(f32::from(options.bounds.size.height) as i32),
+                    width: DevicePixels(f32::from(bounds.size.width) as i32),
+                    height: DevicePixels(f32::from(bounds.size.height) as i32),
                 },
                 transparent: true,
                 // Prefer Mailbox to avoid blocking. Falls back to FIFO if Mailbox is unsupported.
@@ -697,7 +698,7 @@ impl WaylandWindowState {
             outputs: HashMap::default(),
             display: None,
             renderer: Some(renderer),
-            bounds: options.bounds,
+            bounds,
             scale: 1.0,
             input_handler: None,
             decorations: WindowDecorations::Client,
@@ -706,7 +707,7 @@ impl WaylandWindowState {
             maximized: false,
             visibility: WindowVisibility::Visible,
             tiling: Tiling::default(),
-            window_bounds: options.bounds,
+            window_bounds: bounds,
             in_progress_configure: None,
             resize_throttle: false,
             client,
@@ -1953,6 +1954,18 @@ impl PlatformWindow for WaylandWindow {
 
     fn resize(&mut self, size: Size<Pixels>) {
         let mut state = self.borrow_mut();
+
+        if state.surface_state.layer_surface().is_some() {
+            state.surface_state.set_layer_shell_requested_size(size);
+        }
+        if let Some(layer_surface) = state.surface_state.layer_surface() {
+            let size = layer_shell_protocol_size(size);
+            layer_surface.set_size(size.width, size.height);
+            // Wait for configure before changing the drawable size.
+            state.surface.commit();
+            return;
+        }
+
         let state_ptr = self.0.clone();
 
         // A popup's placement is the compositor's, so a resize re-runs the positioner and the
@@ -1971,8 +1984,6 @@ impl PlatformWindow for WaylandWindow {
             }
             return;
         }
-
-        state.surface_state.set_layer_shell_requested_size(size);
 
         // Keep window geometry consistent with configure handling. On Wayland, window geometry is
         // surface-local: resizing should not attempt to translate the window; the compositor
