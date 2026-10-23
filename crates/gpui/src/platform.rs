@@ -618,6 +618,12 @@ pub trait PlatformDisplay: Debug {
     /// across system restarts.
     fn uuid(&self) -> Result<Uuid>;
 
+    /// The name the platform gives this display, such as a Wayland output's connector
+    /// (`DP-2`). `None` where the platform has none.
+    fn name(&self) -> Option<String> {
+        None
+    }
+
     /// Get the bounds for this display
     fn bounds(&self) -> Bounds<Pixels>;
 

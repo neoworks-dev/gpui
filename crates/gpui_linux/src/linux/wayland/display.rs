@@ -38,6 +38,10 @@ impl PlatformDisplay for WaylandDisplay {
         Ok(Uuid::new_v5(&Uuid::NAMESPACE_DNS, name.as_bytes()))
     }
 
+    fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }
