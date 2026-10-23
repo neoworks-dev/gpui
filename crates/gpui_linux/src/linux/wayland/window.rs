@@ -2038,12 +2038,11 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn mouse_position(&self) -> Point<Pixels> {
-        self.borrow()
-            .client
-            .get_client()
-            .borrow()
-            .mouse_location
-            .unwrap_or_default()
+        let state = self.borrow();
+        if !state.hovered {
+            return gpui::POINTER_AWAY;
+        }
+        state.client.get_client().borrow().mouse_location.unwrap_or(gpui::POINTER_AWAY)
     }
 
     fn modifiers(&self) -> Modifiers {

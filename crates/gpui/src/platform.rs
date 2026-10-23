@@ -1210,6 +1210,10 @@ pub enum TextInputStateChange {
     ContentChanged,
 }
 
+/// The position of a pointer that is not over a window: far outside any hitbox, so that nothing
+/// in the window is hovered until a pointer enters it.
+pub const POINTER_AWAY: Point<Pixels> = Point { x: Pixels(-1.0e6), y: Pixels(-1.0e6) };
+
 #[expect(missing_docs)]
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
@@ -1240,6 +1244,7 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
+    /// Where the pointer is in this window, or [`POINTER_AWAY`] while it is not over it.
     fn mouse_position(&self) -> Point<Pixels>;
     fn modifiers(&self) -> Modifiers;
     fn capslock(&self) -> Capslock;

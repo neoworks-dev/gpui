@@ -5693,6 +5693,7 @@ impl Window {
                 PlatformInput::MousePressure(mouse_pressure)
             }
             PlatformInput::MouseExited(mouse_exited) => {
+                self.mouse_position = crate::POINTER_AWAY;
                 self.modifiers = mouse_exited.modifiers;
                 PlatformInput::MouseExited(mouse_exited)
             }
